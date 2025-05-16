@@ -22,8 +22,8 @@ if "messages" not in st.session_state:
     }]
 if "uploaded_image_processed" not in st.session_state:
     st.session_state.uploaded_image_processed = None
-if "last_processed_file" not in st.session_state:
-    st.session_state.last_processed_file = None
+if "last_processed_file_name" not in st.session_state:
+    st.session_state.last_processed_file_name = None
 if "user_input" not in st.session_state:
     st.session_state.user_input = ""
 
@@ -200,7 +200,6 @@ def analyze_image(uploaded_file):
         processed_image, original_image = process_image(uploaded_file)
         if processed_image is not None and pneumonia_model is not None:
             prediction = pneumonia_model.predict(processed_image)[0][0]
-            # No confidence shown
             if prediction > 0.5:
                 result_class = "Signs possibly consistent with pneumonia detected."
                 result_color = "result-pneumonia"
@@ -315,10 +314,12 @@ with col1:
 
     uploaded_file = st.file_uploader("Upload chest X-ray image", type=["jpg", "jpeg", "png"], key="file_uploader")
 
-    if uploaded_file is not None and uploaded_file != st.session_state.last_processed_file:
-        st.session_state.last_processed_file = uploaded_file
-        st.session_state.messages.append({"role": "user", "content": "I've uploaded a chest X-ray for analysis."})
-        analyze_image(uploaded_file)
+    if uploaded_file is not None:
+        # Compare by file name to avoid Streamlit state errors
+        if uploaded_file.name != st.session_state.last_processed_file_name:
+            st.session_state.last_processed_file_name = uploaded_file.name
+            st.session_state.messages.append({"role": "user", "content": "I've uploaded a chest X-ray for analysis."})
+            analyze_image(uploaded_file)
 
 with col2:
     st.markdown("<h3>Healthcare Assistant Chat</h3>", unsafe_allow_html=True)
@@ -331,18 +332,24 @@ with col2:
             else:
                 st.markdown(f"<div class='assistant-message'>{message['content']}</div>", unsafe_allow_html=True)
 
+    def on_send():
+        user_text = st.session_state.user_input.strip()
+        if user_text != "":
+            st.session_state.messages.append({"role": "user", "content": user_text})
+            response = chat_response(user_text)
+            st.session_state.messages.append({"role": "assistant", "content": response})
+        # Clear input safely after sending
+        st.session_state.user_input = ""
+
     user_input = st.text_input(
         "Ask me about chest X-ray analysis or pneumonia screening...",
         key="user_input",
-        value=st.session_state.user_input
+        on_change=on_send,
+        placeholder="Type your question here..."
     )
-    send_clicked = st.button("Send")
 
-    if send_clicked and user_input.strip() != "":
-        st.session_state.messages.append({"role": "user", "content": user_input.strip()})
-        response = chat_response(user_input.strip())
-        st.session_state.messages.append({"role": "assistant", "content": response})
-        st.session_state.user_input = ""
+    if st.button("Send"):
+        on_send()
 
 # Footer with disclaimer and credits
 st.markdown("""
