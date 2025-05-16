@@ -1,24 +1,22 @@
 import streamlit as st
 import numpy as np
-import tensorflow as tf
 from PIL import Image
 from tensorflow.keras.models import load_model
 import requests
 import os
 import dotenv
 
-# Load environment variables from .env file
+# Load env vars
 dotenv.load_dotenv()
 HUGGINGFACE_API_TOKEN = os.getenv("HUGGINGFACE_API_TOKEN")
 
-# Page configuration with custom styling
+# Page config and styling
 st.set_page_config(
     page_title="PneumoAssist: X-Ray Analysis & Healthcare Assistant",
     page_icon="🫁",
     layout="wide"
 )
 
-# Custom CSS for refined UI
 st.markdown("""
 <style>
     body, .stApp {
@@ -143,13 +141,19 @@ st.markdown("""
         font-size: 13px;
         color: #666666;
     }
+    .credits {
+        margin-top: 10px;
+        font-size: 12px;
+        color: #444444;
+        font-style: italic;
+    }
 </style>
 """, unsafe_allow_html=True)
 
 # Header
 st.markdown("<div class='header-section'><h1>🫁 PneumoAssist: X-Ray Analysis & Healthcare Assistant</h1></div>", unsafe_allow_html=True)
 
-# Cache the model load
+# Load model with caching
 @st.cache_resource
 def load_pneumonia_model():
     try:
@@ -160,18 +164,19 @@ def load_pneumonia_model():
 
 pneumonia_model = load_pneumonia_model()
 
-# Initialize chat history in session state
+# Initialize chat and image in session state
 if "messages" not in st.session_state:
     st.session_state.messages = [{
         "role": "assistant",
         "content": (
-            "Hello! I'm PneumoAssist, your healthcare assistant focused on chest X-ray "
-            "analysis for pneumonia detection. I provide objective information and guidance "
-            "based strictly on uploaded images and general knowledge. "
-            "I do NOT provide diagnosis or medical advice beyond educational content. "
-            "How can I assist you today?"
+            "Hello! I'm PneumoAssist, your healthcare assistant specialized in chest X-ray analysis "
+            "for pneumonia screening. Upload your X-ray image and ask me questions about it. "
+            "Please remember, I provide educational information only, and cannot diagnose or treat."
         )
     }]
+
+if "uploaded_image_processed" not in st.session_state:
+    st.session_state.uploaded_image_processed = None
 
 def process_image(uploaded_file):
     try:
@@ -186,22 +191,76 @@ def process_image(uploaded_file):
         st.error(f"Error processing image: {e}")
         return None, None
 
+def analyze_image(uploaded_file):
+    with st.spinner("Analyzing your X-ray image..."):
+        processed_image, original_image = process_image(uploaded_file)
+        if processed_image is not None and pneumonia_model is not None:
+            prediction = pneumonia_model.predict(processed_image)[0][0]
+            # No confidence scores shown
+            if prediction > 0.5:
+                result_class = "Signs possibly consistent with pneumonia detected."
+                result_color = "result-pneumonia"
+                explanation = (
+                    "Analysis suggests patterns that may be associated with pneumonia, such as areas of increased opacity or consolidation. "
+                    "This is an automated screening tool, and results are for educational purposes only. "
+                    "Please consult a healthcare professional for definitive diagnosis and advice."
+                )
+            else:
+                result_class = "No clear signs of pneumonia detected."
+                result_color = "result-normal"
+                explanation = (
+                    "The X-ray does not show evident patterns typically associated with pneumonia. "
+                    "However, this tool does not replace professional medical evaluation. "
+                    "Consult your healthcare provider for any concerns."
+                )
+
+            st.image(original_image, caption="Uploaded X-ray Image", use_container_width=True)
+
+            st.markdown(f"""
+            <div class="result-box {result_color}">
+                <h3>{result_class}</h3>
+                <p>{explanation}</p>
+                <p class="disclaimer">
+                    Medical Disclaimer: This tool provides educational screening information only and is not a substitute for professional medical advice, diagnosis, or treatment.
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
+
+            # Save processed image array in session for chatbot context
+            st.session_state.uploaded_image_processed = processed_image
+
+            # Append simple analysis summary (no score)
+            st.session_state.messages.append({
+                "role": "assistant",
+                "content": result_class
+            })
+            return True
+    return False
+
 def chat_response(user_input):
     API_URL = "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.3"
     headers = {"Authorization": f"Bearer {HUGGINGFACE_API_TOKEN}"}
 
-    # Restrict chat to safe, informational responses about pneumonia and x-ray analysis
-    safe_system_prompt = """<s>[INST] <<SYS>>
-You are PneumoAssist, a concise and cautious healthcare assistant. You only provide
-educational information on pneumonia and X-ray analysis based strictly on uploaded
-images and general guidelines. Do NOT offer diagnosis, prognosis, or symptom
-assessment. Avoid suggesting medical conditions or treatments. Always
-recommend consulting qualified healthcare professionals for any medical concerns.
-Respond briefly and clearly to user queries within these boundaries.
-<</SYS>>"""
-
+    # Build prompt with conversation history + mention that user uploaded an image (if any)
     history = st.session_state.messages[-5:-1] if len(st.session_state.messages) > 1 else []
     history_str = "\n".join([f"{msg['role'].capitalize()}: {msg['content']}" for msg in history])
+
+    # Note: we tell the model that an X-ray image was uploaded and analyzed,
+    # but we do NOT share raw image data (the model can't see images)
+    image_info = ""
+    if st.session_state.uploaded_image_processed is not None:
+        image_info = (
+            "The user has uploaded a chest X-ray image which was analyzed for pneumonia screening. "
+            "Use this context to provide educational answers about pneumonia and X-ray interpretation. "
+        )
+
+    safe_system_prompt = f"""<s>[INST] <<SYS>>
+You are PneumoAssist, a cautious and concise healthcare assistant. {image_info}
+You only provide educational information on pneumonia and X-ray analysis based strictly on uploaded images and general guidelines. 
+Do NOT offer diagnosis, prognosis, or symptom assessment. Avoid suggesting medical conditions or treatments.
+Always recommend consulting qualified healthcare professionals for any medical concerns.
+Respond briefly and clearly to user queries within these boundaries.
+<</SYS>>"""
 
     prompt = f"""{safe_system_prompt}
 
@@ -223,7 +282,7 @@ User: {user_input} [/INST]"""
         response.raise_for_status()
         full_text = response.json()[0]['generated_text']
         answer = full_text.split("[/INST]")[-1].strip()
-        # Extra safety: Remove any lines suggesting diagnosis or medical advice beyond the prompt
+        # Safety filter: remove any unwanted medical advice wording
         filtered_answer = "\n".join(
             line for line in answer.split("\n")
             if not any(
@@ -231,57 +290,13 @@ User: {user_input} [/INST]"""
                 for banned_word in ["diagnose", "diagnosis", "treatment", "prescribe", "symptom", "suggest"]
             )
         )
-        return filtered_answer if filtered_answer.strip() else "I'm here to provide information about X-ray analysis and pneumonia screening based on images."
+        return filtered_answer if filtered_answer.strip() else (
+            "I'm here to provide information about chest X-ray analysis and pneumonia screening based on images."
+        )
     except Exception:
         return "Sorry, I'm currently unable to process your request. Please try again later."
 
-def analyze_image(uploaded_file):
-    with st.spinner("Analyzing your X-ray image..."):
-        processed_image, original_image = process_image(uploaded_file)
-        if processed_image is not None and pneumonia_model is not None:
-            prediction = pneumonia_model.predict(processed_image)[0][0]
-            # We do NOT show confidence or accuracy per instructions
-            # Interpret prediction simply as binary classification without score
-            if prediction > 0.5:
-                result_class = "Signs possibly consistent with pneumonia detected."
-                result_color = "result-pneumonia"
-                explanation = (
-                    "Analysis of the chest X-ray suggests patterns that may be associated with pneumonia, "
-                    "such as areas of increased opacity or consolidation. "
-                    "This is an automated screening tool, and results are for educational purposes only. "
-                    "Please consult a healthcare professional for definitive diagnosis and advice."
-                )
-            else:
-                result_class = "No clear signs of pneumonia detected."
-                result_color = "result-normal"
-                explanation = (
-                    "The chest X-ray does not show evident patterns typically associated with pneumonia. "
-                    "However, this tool does not replace professional medical evaluation. "
-                    "Consult your healthcare provider for any concerns."
-                )
-
-            st.image(original_image, caption="Uploaded X-ray Image", use_container_width=True)
-
-            st.markdown(f"""
-            <div class="result-box {result_color}">
-                <h3>{result_class}</h3>
-                <p>{explanation}</p>
-                <p class="disclaimer">
-                    Medical Disclaimer: This tool provides educational screening information only and is not a substitute for professional medical advice, diagnosis, or treatment.
-                </p>
-            </div>
-            """, unsafe_allow_html=True)
-
-            # Log summary without confidence scores
-            analysis_summary = result_class
-            st.session_state.messages.append({
-                "role": "assistant",
-                "content": analysis_summary
-            })
-            return True
-    return False
-
-# Layout with two columns: left for upload and instructions, right for chat
+# Layout with two columns
 col1, col2 = st.columns([1, 2])
 
 with col1:
@@ -329,12 +344,17 @@ with col2:
             st.session_state.messages.append({"role": "user", "content": user_input})
             response = chat_response(user_input)
             st.session_state.messages.append({"role": "assistant", "content": response})
-            st.experimental_rerun()
+            # Let Streamlit rerun naturally on form submit — no st.experimental_rerun()
 
-# Footer with disclaimer
+# Footer with disclaimer and credits
 st.markdown("""
 <div class="footer">
     PneumoAssist is an educational tool designed for X-ray image screening support only.
-    It does NOT provide medical diagnosis or treatment. Always consult qualified healthcare professionals for medical concerns.
+    It does <strong>NOT</strong> provide medical diagnosis or treatment. Always consult qualified healthcare professionals for medical concerns.
+    <div class="credits">
+        Created by Karim Derbali, Terry Zhuang, Yunlei Xu, Muhammad Hassaan Sohail,<br>
+        &copy; University of Chicago.<br>
+        Your privacy and data security are important to us. Uploaded images are processed only in-memory and not stored or shared.
+    </div>
 </div>
 """, unsafe_allow_html=True)
