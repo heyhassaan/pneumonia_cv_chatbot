@@ -10,6 +10,23 @@ import dotenv
 dotenv.load_dotenv()
 HUGGINGFACE_API_TOKEN = os.getenv("HUGGINGFACE_API_TOKEN")
 
+# Initialize session state keys safely at the very start
+if "messages" not in st.session_state:
+    st.session_state.messages = [{
+        "role": "assistant",
+        "content": (
+            "Hello! I'm PneumoAssist, your healthcare assistant specialized in chest X-ray analysis "
+            "for pneumonia screening. Upload your X-ray image and ask me questions about it. "
+            "Please remember, I provide educational information only, and cannot diagnose or treat."
+        )
+    }]
+if "uploaded_image_processed" not in st.session_state:
+    st.session_state.uploaded_image_processed = None
+if "last_processed_file" not in st.session_state:
+    st.session_state.last_processed_file = None
+if "user_input" not in st.session_state:
+    st.session_state.user_input = ""
+
 # Page config and styling
 st.set_page_config(
     page_title="PneumoAssist: X-Ray Analysis & Healthcare Assistant",
@@ -165,20 +182,6 @@ def load_pneumonia_model():
 
 pneumonia_model = load_pneumonia_model()
 
-# Initialize chat & image session state
-if "messages" not in st.session_state:
-    st.session_state.messages = [{
-        "role": "assistant",
-        "content": (
-            "Hello! I'm PneumoAssist, your healthcare assistant specialized in chest X-ray analysis "
-            "for pneumonia screening. Upload your X-ray image and ask me questions about it. "
-            "Please remember, I provide educational information only, and cannot diagnose or treat."
-        )
-    }]
-
-if "uploaded_image_processed" not in st.session_state:
-    st.session_state.uploaded_image_processed = None
-
 def process_image(uploaded_file):
     try:
         image = Image.open(uploaded_file)
@@ -197,7 +200,7 @@ def analyze_image(uploaded_file):
         processed_image, original_image = process_image(uploaded_file)
         if processed_image is not None and pneumonia_model is not None:
             prediction = pneumonia_model.predict(processed_image)[0][0]
-            # No confidence scores shown
+            # No confidence shown
             if prediction > 0.5:
                 result_class = "Signs possibly consistent with pneumonia detected."
                 result_color = "result-pneumonia"
@@ -227,10 +230,8 @@ def analyze_image(uploaded_file):
             </div>
             """, unsafe_allow_html=True)
 
-            # Save processed image in session for chatbot context
             st.session_state.uploaded_image_processed = processed_image
 
-            # Append analysis summary (no score)
             st.session_state.messages.append({
                 "role": "assistant",
                 "content": result_class
@@ -314,9 +315,6 @@ with col1:
 
     uploaded_file = st.file_uploader("Upload chest X-ray image", type=["jpg", "jpeg", "png"], key="file_uploader")
 
-    if "last_processed_file" not in st.session_state:
-        st.session_state.last_processed_file = None
-
     if uploaded_file is not None and uploaded_file != st.session_state.last_processed_file:
         st.session_state.last_processed_file = uploaded_file
         st.session_state.messages.append({"role": "user", "content": "I've uploaded a chest X-ray for analysis."})
@@ -332,9 +330,6 @@ with col2:
                 st.markdown(f"<div class='user-message'>{message['content']}</div>", unsafe_allow_html=True)
             else:
                 st.markdown(f"<div class='assistant-message'>{message['content']}</div>", unsafe_allow_html=True)
-
-    if "user_input" not in st.session_state:
-        st.session_state.user_input = ""
 
     user_input = st.text_input(
         "Ask me about chest X-ray analysis or pneumonia screening...",
