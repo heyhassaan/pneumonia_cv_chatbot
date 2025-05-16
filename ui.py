@@ -6,11 +6,11 @@ import requests
 import os
 import dotenv
 
-# Load env vars
+# Load environment variables
 dotenv.load_dotenv()
 HUGGINGFACE_API_TOKEN = os.getenv("HUGGINGFACE_API_TOKEN")
 
-# Initialize session state keys safely at the very start
+# Initialize session state variables safely
 if "messages" not in st.session_state:
     st.session_state.messages = [{
         "role": "assistant",
@@ -22,12 +22,12 @@ if "messages" not in st.session_state:
     }]
 if "uploaded_image_processed" not in st.session_state:
     st.session_state.uploaded_image_processed = None
-if "last_processed_file_name" not in st.session_state:
-    st.session_state.last_processed_file_name = None
+if "last_processed_file" not in st.session_state:
+    st.session_state.last_processed_file = None
 if "user_input" not in st.session_state:
     st.session_state.user_input = ""
 
-# Page config and styling
+# Page configuration and styles
 st.set_page_config(
     page_title="PneumoAssist: X-Ray Analysis & Healthcare Assistant",
     page_icon="🫁",
@@ -230,7 +230,6 @@ def analyze_image(uploaded_file):
             """, unsafe_allow_html=True)
 
             st.session_state.uploaded_image_processed = processed_image
-
             st.session_state.messages.append({
                 "role": "assistant",
                 "content": result_class
@@ -248,16 +247,15 @@ def chat_response(user_input):
     image_info = ""
     if st.session_state.uploaded_image_processed is not None:
         image_info = (
-            "The user has uploaded a chest X-ray image which was analyzed for pneumonia screening. "
-            "Use this context to provide educational answers about pneumonia and X-ray interpretation. "
+            "The user has uploaded a chest X-ray image analyzed for pneumonia screening. "
+            "Provide clear, concise educational information based on guidelines and the image context. "
+            "Do NOT provide any diagnosis, treatment, or symptom assessment."
         )
 
     safe_system_prompt = f"""<s>[INST] <<SYS>>
-You are PneumoAssist, a cautious and concise healthcare assistant. {image_info}
-You only provide educational information on pneumonia and X-ray analysis based strictly on uploaded images and general guidelines. 
-Do NOT offer diagnosis, prognosis, or symptom assessment. Avoid suggesting medical conditions or treatments.
-Always recommend consulting qualified healthcare professionals for any medical concerns.
-Respond briefly and clearly to user queries within these boundaries.
+You are PneumoAssist, a cautious and concise healthcare assistant specialized in pneumonia and chest X-ray analysis. {image_info}
+Only provide educational, guideline-based information. Do not diagnose or prescribe treatment. Always recommend consulting healthcare professionals.
+Answer clearly, helpfully, and briefly.
 <</SYS>>"""
 
     prompt = f"""{safe_system_prompt}
@@ -269,9 +267,10 @@ User: {user_input} [/INST]"""
         "inputs": prompt,
         "parameters": {
             "max_new_tokens": 150,
-            "temperature": 0.1,
-            "do_sample": False,
-            "repetition_penalty": 1.5
+            "temperature": 0.3,
+            "do_sample": True,
+            "top_p": 0.9,
+            "repetition_penalty": 1.1
         }
     }
 
@@ -280,18 +279,26 @@ User: {user_input} [/INST]"""
         response.raise_for_status()
         full_text = response.json()[0]['generated_text']
         answer = full_text.split("[/INST]")[-1].strip()
-        filtered_answer = "\n".join(
-            line for line in answer.split("\n")
-            if not any(
-                banned_word in line.lower()
-                for banned_word in ["diagnose", "diagnosis", "treatment", "prescribe", "symptom", "suggest"]
+
+        # Gentle filtering to remove only disallowed explicit diagnosis or treatment advice
+        disallowed_terms = ["diagnose", "diagnosis", "treatment", "prescribe", "symptom", "suggest you see a doctor"]
+        filtered_lines = []
+        for line in answer.split("\n"):
+            if any(term in line.lower() for term in disallowed_terms):
+                continue
+            filtered_lines.append(line)
+
+        filtered_answer = "\n".join(filtered_lines).strip()
+
+        if len(filtered_answer) < 10:
+            return (
+                "I provide educational information about chest X-ray analysis and pneumonia screening based on images. "
+                "Feel free to ask questions within this scope."
             )
-        )
-        return filtered_answer if filtered_answer.strip() else (
-            "I'm here to provide information about chest X-ray analysis and pneumonia screening based on images."
-        )
+        return filtered_answer
+
     except Exception:
-        return "Sorry, I'm currently unable to process your request. Please try again later."
+        return "Sorry, I’m unable to answer right now. Please try again later."
 
 # Layout
 col1, col2 = st.columns([1, 2])
@@ -314,12 +321,10 @@ with col1:
 
     uploaded_file = st.file_uploader("Upload chest X-ray image", type=["jpg", "jpeg", "png"], key="file_uploader")
 
-    if uploaded_file is not None:
-        # Compare by file name to avoid Streamlit state errors
-        if uploaded_file.name != st.session_state.last_processed_file_name:
-            st.session_state.last_processed_file_name = uploaded_file.name
-            st.session_state.messages.append({"role": "user", "content": "I've uploaded a chest X-ray for analysis."})
-            analyze_image(uploaded_file)
+    if uploaded_file is not None and uploaded_file != st.session_state.last_processed_file:
+        st.session_state.last_processed_file = uploaded_file
+        st.session_state.messages.append({"role": "user", "content": "I've uploaded a chest X-ray for analysis."})
+        analyze_image(uploaded_file)
 
 with col2:
     st.markdown("<h3>Healthcare Assistant Chat</h3>", unsafe_allow_html=True)
@@ -332,24 +337,18 @@ with col2:
             else:
                 st.markdown(f"<div class='assistant-message'>{message['content']}</div>", unsafe_allow_html=True)
 
-    def on_send():
-        user_text = st.session_state.user_input.strip()
-        if user_text != "":
-            st.session_state.messages.append({"role": "user", "content": user_text})
-            response = chat_response(user_text)
-            st.session_state.messages.append({"role": "assistant", "content": response})
-        # Clear input safely after sending
-        st.session_state.user_input = ""
-
     user_input = st.text_input(
         "Ask me about chest X-ray analysis or pneumonia screening...",
         key="user_input",
-        on_change=on_send,
-        placeholder="Type your question here..."
+        value=st.session_state.user_input
     )
+    send_clicked = st.button("Send")
 
-    if st.button("Send"):
-        on_send()
+    if send_clicked and user_input.strip() != "":
+        st.session_state.messages.append({"role": "user", "content": user_input.strip()})
+        response = chat_response(user_input.strip())
+        st.session_state.messages.append({"role": "assistant", "content": response})
+        st.session_state.user_input = ""
 
 # Footer with disclaimer and credits
 st.markdown("""
