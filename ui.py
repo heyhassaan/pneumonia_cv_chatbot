@@ -113,7 +113,7 @@ st.markdown("""
         outline: none;
         box-shadow: 0 0 8px rgba(59, 120, 231, 0.3);
     }
-    button[type="submit"] {
+    button[type="submit"], button {
         background-color: #3b78e7;
         color: white;
         border: none;
@@ -122,8 +122,9 @@ st.markdown("""
         border-radius: 25px;
         cursor: pointer;
         transition: background-color 0.25s ease;
+        margin-top: 10px;
     }
-    button[type="submit"]:hover {
+    button[type="submit"]:hover, button:hover {
         background-color: #315fbb;
     }
     /* Clear floats after chat messages */
@@ -153,7 +154,7 @@ st.markdown("""
 # Header
 st.markdown("<div class='header-section'><h1>🫁 PneumoAssist: X-Ray Analysis & Healthcare Assistant</h1></div>", unsafe_allow_html=True)
 
-# Load model with caching
+# Load pneumonia model once
 @st.cache_resource
 def load_pneumonia_model():
     try:
@@ -164,7 +165,7 @@ def load_pneumonia_model():
 
 pneumonia_model = load_pneumonia_model()
 
-# Initialize chat and image in session state
+# Initialize chat & image session state
 if "messages" not in st.session_state:
     st.session_state.messages = [{
         "role": "assistant",
@@ -226,10 +227,10 @@ def analyze_image(uploaded_file):
             </div>
             """, unsafe_allow_html=True)
 
-            # Save processed image array in session for chatbot context
+            # Save processed image in session for chatbot context
             st.session_state.uploaded_image_processed = processed_image
 
-            # Append simple analysis summary (no score)
+            # Append analysis summary (no score)
             st.session_state.messages.append({
                 "role": "assistant",
                 "content": result_class
@@ -241,12 +242,9 @@ def chat_response(user_input):
     API_URL = "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.3"
     headers = {"Authorization": f"Bearer {HUGGINGFACE_API_TOKEN}"}
 
-    # Build prompt with conversation history + mention that user uploaded an image (if any)
     history = st.session_state.messages[-5:-1] if len(st.session_state.messages) > 1 else []
     history_str = "\n".join([f"{msg['role'].capitalize()}: {msg['content']}" for msg in history])
 
-    # Note: we tell the model that an X-ray image was uploaded and analyzed,
-    # but we do NOT share raw image data (the model can't see images)
     image_info = ""
     if st.session_state.uploaded_image_processed is not None:
         image_info = (
@@ -282,7 +280,6 @@ User: {user_input} [/INST]"""
         response.raise_for_status()
         full_text = response.json()[0]['generated_text']
         answer = full_text.split("[/INST]")[-1].strip()
-        # Safety filter: remove any unwanted medical advice wording
         filtered_answer = "\n".join(
             line for line in answer.split("\n")
             if not any(
@@ -296,7 +293,7 @@ User: {user_input} [/INST]"""
     except Exception:
         return "Sorry, I'm currently unable to process your request. Please try again later."
 
-# Layout with two columns
+# Layout
 col1, col2 = st.columns([1, 2])
 
 with col1:
@@ -336,15 +333,21 @@ with col2:
             else:
                 st.markdown(f"<div class='assistant-message'>{message['content']}</div>", unsafe_allow_html=True)
 
-    with st.form(key="chat_form", clear_on_submit=True):
-        user_input = st.text_input("Ask me about chest X-ray analysis or pneumonia screening...", key="user_input")
-        submit_button = st.form_submit_button("Send")
+    if "user_input" not in st.session_state:
+        st.session_state.user_input = ""
 
-        if submit_button and user_input:
-            st.session_state.messages.append({"role": "user", "content": user_input})
-            response = chat_response(user_input)
-            st.session_state.messages.append({"role": "assistant", "content": response})
-            # Let Streamlit rerun naturally on form submit — no st.experimental_rerun()
+    user_input = st.text_input(
+        "Ask me about chest X-ray analysis or pneumonia screening...",
+        key="user_input",
+        value=st.session_state.user_input
+    )
+    send_clicked = st.button("Send")
+
+    if send_clicked and user_input.strip() != "":
+        st.session_state.messages.append({"role": "user", "content": user_input.strip()})
+        response = chat_response(user_input.strip())
+        st.session_state.messages.append({"role": "assistant", "content": response})
+        st.session_state.user_input = ""
 
 # Footer with disclaimer and credits
 st.markdown("""
